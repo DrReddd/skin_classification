@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -42,10 +41,15 @@ def weights(dataset):
             counter[image[1]] = 0
     for image in dataset.imgs:
         weights.append(sumup / counter[image[1]])
-    return weights
+
+    weights_short = []
+    for k, v in counter.items():
+        print(len(dataset))
+        weights_short.append(len(dataset)/v)
+    return weights, weights_short
 
 
-weights_train = weights(df_train)
+weights_train_long, weights_train = weights(df_train)
 
 
 def dic_invert(dic):
@@ -54,8 +58,7 @@ def dic_invert(dic):
 
 
 #  training data unbalanced sample using weights
-dataloader_train = DataLoader(df_train, sampler=torch.utils.data.WeightedRandomSampler(
-    weights_train, len(weights_train)), batch_size=64, pin_memory=True)
+dataloader_train = DataLoader(df_train, batch_size=64, pin_memory=True, shuffle=True) # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
 
 dataloader_test = DataLoader(df_test, batch_size=64, pin_memory=True)
 
@@ -107,7 +110,7 @@ class CNN(nn.Module):
         self.dense = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 7)
+            nn.Linear(64, 3)
         )
 
     def forward(self, x):
@@ -131,7 +134,7 @@ def run_epoch(data_iterator, model, optimizer):
                     model_out = model.forward(data)
             else:
                 model_out = model.forward(data)
-            indiv_loss = nn.functional.cross_entropy(model_out, labels)
+            indiv_loss = nn.functional.cross_entropy(model_out, labels, weight=torch.FloatTensor(weights_train).cuda())
             loss.append(indiv_loss.item())
             prediction = torch.argmax(model_out, dim=1)
             asd = np.equal(prediction.cpu().numpy(), labels.cpu().numpy())
