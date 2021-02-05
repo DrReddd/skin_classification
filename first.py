@@ -1,81 +1,16 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-import os
 from tqdm import tqdm
 
 
 # TODO: rewrite into OOP in the end
-metadata = pd.read_csv("HAM10000_metadata.csv")
-tumor_names = {"akiec": "Act. Keratoses, intraep. carc.",
-               "nv": "melanocytic nevi",
-               "bkl": "bening keratosis-like lesions",
-               "bcc": "basal cell carc.",
-               "vasc": "vascular lesions",
-               "mel": "melanoma",
-               "df": "dermatofibroma"}
 
 device = torch.device('cuda:0')
-
-
-def unique(series):
-    """returns indecies of elements which are unique in the series (only 1 occurence)"""
-    uniq = {}
-    idxs = []
-    for element in series:
-        if uniq.get(element) is not None:
-            uniq[element] = False
-        else:
-            uniq[element] = True
-    for idx, element in enumerate(series):
-        if uniq[element] is True:
-            idxs.append(idx)
-
-    return idxs
-
-
-uniq = unique(metadata.loc[:, "lesion_id"])
-unique_data = metadata.iloc[uniq, :]
-unique_data
-plt.hist(unique_data.loc[:, "dx"])
-uniq = unique(metadata.loc[:, "lesion_id"])
-
-for_validation = unique_data.groupby("dx").sample(frac=0.1)
-for_training = metadata.iloc[~metadata.index.isin(for_validation.index), :]
-plt.hist(for_validation.loc[:, "dx"])
-train_to_label = {}
-test_to_label = {}
-
-for idx, image in enumerate(for_validation.loc[:, "image_id"]):
-    test_to_label[image + ".jpg"] = for_validation.iloc[idx, 2]
-for idx, image in enumerate(for_training.loc[:, "image_id"]):
-    train_to_label[image + ".jpg"] = for_training.iloc[idx, 2]
-
-
-def rearrange_files(path, train, test):
-    """Rearrange files in my file system"""
-    print(set(train.values()))
-    for value in set(train.values()):
-        try:
-            os.makedirs(f"train/{value}")
-            os.makedirs(f"test/{value}")
-        except FileExistsError:
-            continue
-    for dirpath, dirnames, filenames in os.walk(path):
-        for filename in filenames:
-            if train.get(filename) is not None:
-                os.replace(dirpath + "/" + filename,
-                           f"C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/{train[filename]}/{filename}")
-            elif test.get(filename) is not None:
-                os.replace(dirpath + "/" + filename,
-                           f"C:/Users/pmarc/PycharmProjects/AI2/melanoma/test/{test[filename]}/{filename}")
-
-
-rearrange_files("C:/Users/pmarc/PycharmProjects/AI2/melanoma/imgs/", train_to_label, test_to_label)
 
 #  teszt images resized
 transform_test = transforms.Compose([transforms.Resize((260, 160)),
@@ -134,7 +69,7 @@ def image_shower(dataloader):
     idx_to_class_train = dic_invert(df_train.class_to_idx)
     for i in range(4):
         label = idx_to_class_train[labels[i].item()]
-        label = tumor_names[label]
+        #label = tumor_names[label]
         ax = axes[i]
         image = images[i].permute((1, 2, 0))
         ax.imshow(image)
