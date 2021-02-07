@@ -1,3 +1,4 @@
+
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -5,7 +6,75 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import cv2
 
+
+class ImageCorrections:
+    """
+    Namespace for correction methods applied once to all images
+    """
+
+    @staticmethod
+    def shades_of_gry(image, power=6):
+        """Applies shades of gray color constancy with using L6 norm of image. Requires images with integer color range
+        of 0 to 255
+
+        :param power: norm
+        :param image: Matrix: h*w*c
+        :return: image with color constancy
+        """
+        original_type = image.dtype
+        new_image = image.astype(np.float)
+        if power == np.inf:  # infinity norm
+            lightsource = np.max(new_image, (0, 1))
+        else:
+            new_image = np.power(new_image, power)
+            lightsource = np.power(np.mean(new_image, (0, 1)), 1/power)
+        lightsource_normalized = lightsource / np.power(np.sum(np.power(lightsource, 2)), 0.5)
+        lightsource_rgb = np.sqrt(3)*lightsource_normalized
+        image = np.multiply(image, 1/lightsource_rgb)
+        image = np.clip(image, a_min=0, a_max=255)
+        return image.astype(original_type)
+
+    @staticmethod
+    def gamma_correction(image, gamma=2.2):
+        """Applies gamma correction, default value is used in the original shade of gray paper, apply before
+        shade_of_gry
+
+        :param image: image to apply gamma correction on
+        :param gamma: gamma correction value
+        :return: gamma corrected image
+        """
+        original_type = image.dtype
+        image = image.astype("uint8")
+        lookup_table = np.zeros(256, dtype="uint8")
+        for i in range(256):
+            lookup_table[i] = 255 * np.power((i/255), 1/gamma)
+        new_image = cv2.LUT(image, lookup_table)
+        return new_image.astype(original_type)
+
+    def plot_image(self, image_path, gamma=2.2, power=6):
+        """Plots original image and the correction side by side
+
+        :param power: see in function shades_of_gry
+        :param gamma: see in function gamma_correction
+        :param image_path: path to image
+        :return: None, plots images
+        """
+        image = cv2.imread(image_path)
+        image = image[..., ::-1]
+        image_gamma = self.gamma_correction(image, gamma)
+        image_shades = self.shades_of_gry(image_gamma, power)
+        fig, axs = plt.subplots(1, 3)
+        axs[0].imshow(image)
+        axs[1].imshow(image_gamma)
+        axs[2].imshow(image_shades)
+        plt.show()
+
+
+corrections = ImageCorrections()
+corrections.plot_image("C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/melanoma/ISIC_0000145_downsampled.jpg",
+                       power=6, gamma=2.2)
 
 # TODO: rewrite into OOP in the end
 
@@ -53,7 +122,7 @@ weights_train_long, weights_train = weights(df_train)
 
 
 def dic_invert(dic):
-    "Invert a dictionary, only use with 1-1 key-value dics"
+    """Invert a dictionary, only use with 1-1 key-value dics"""
     return {v: k for k, v in dic.items()}
 
 
