@@ -234,7 +234,12 @@ class CNN(nn.Module):
         return x
 
 
-def mean_sd(data_iterator):
+def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Calculates mean and standard deviation values of RGB channels globally across images in data_iterator generator. 
+    :param data_iterator: DataLoader generator object
+    :return: mean and sd matrices in torch format
+    """
     mean = torch.zeros(3)
     sd = torch.zeros(3)
 
@@ -249,14 +254,15 @@ def mean_sd(data_iterator):
     return mean, sd
 
 
-def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer = None, is_test: bool = False) -> Tuple[
-    np.ndarray]:
+def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None, is_test: bool = False)\
+        -> Tuple[np.ndarray]:
     """
     Runs an epoch of training
+    :param is_test: set true if epoch is used in testing the model with test set, so it returns confusion matrix too
     :param data_iterator: DataLoader object
     :param model: pytorch model
     :param optimizer: pytorch optimizer
-    :return: mean loss and accuracy of the epoch
+    :return: mean loss and accuracy of the epoch, and optionally confusion matrix
     """
     loss = []
     acc = []
@@ -290,7 +296,7 @@ def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer = None
 
 
 # extra params for optional SGD:
-def train_model(train_data: DataLoader, test_data: DataLoader, model: CNN, n_epochs: int = 30) -> None:
+def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module, n_epochs: int = 30) -> None:
     """
     Trains neural network.
     :param train_data: training data
@@ -315,7 +321,7 @@ def train_model(train_data: DataLoader, test_data: DataLoader, model: CNN, n_epo
     torch.save(model, 'model421.pt')
 
 
-def test_model(test_data: DataLoader, model: CNN) -> None:
+def test_model(test_data: DataLoader, model: nn.Module) -> None:
     """
     Tests neural network.
     :param test_data: test data
