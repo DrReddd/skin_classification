@@ -8,6 +8,7 @@ from tqdm import tqdm
 import cv2
 import os
 from typing import List, Tuple
+from efficientnet_pytorch import EfficientNet
 
 
 class ImageCorrections:
@@ -94,9 +95,6 @@ class ImageCorrections:
         return image_new
 
 
-corrections = ImageCorrections()
-
-
 # corrections.plot_image("C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/melanoma/ISIC_0000145_downsampled.jpg",
 #                        power=6, gamma=2.2)
 #
@@ -142,27 +140,10 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
                 cv2.imwrite(newpath + "/" + file, color_corrected)
 
 
-apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/val/")
-apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/test/")
-apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/")
+# apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/val/")
+# apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/test/")
+# apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/")
 # TODO: rewrite into OOP in the end
-
-device = torch.device('cuda:0')
-
-#  teszt images resized
-transform_test = transforms.Compose([transforms.RandomResizedCrop((400, 400), scale=(0.9, 1.0)),
-                                     transforms.ToTensor()])
-
-# train images resized, and random transformed for augmentation
-transform_train = transforms.Compose([transforms.RandomResizedCrop((400, 400), scale=(0.7, 1.0)),
-                                      transforms.RandomHorizontalFlip(),
-                                      transforms.RandomVerticalFlip(),
-                                      transforms.ColorJitter(brightness=0.3, contrast=0.3),
-                                      transforms.RandomErasing,
-                                      transforms.ToTensor()
-                                      ])
-df_train = datasets.ImageFolder("train", transform=transform_train)
-df_test = datasets.ImageFolder("test", transform=transform_test)
 
 
 # TODO: maybe add some extra channels to pictures besides RGB, with manual functions applied to pics, to get some unique,
@@ -193,14 +174,6 @@ def weights(dataset: datasets.ImageFolder) -> Tuple[List[float]]:
     return weights, weights_short
 
 
-weights_train_long, weights_train = weights(df_train)
-
-dataloader_train = DataLoader(df_train, batch_size=64, pin_memory=True,
-                              shuffle=True)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
-
-dataloader_test = DataLoader(df_test, batch_size=64, pin_memory=True)
-
-
 def image_shower(dataloader: DataLoader, width: int = 2, height: int = 2) -> None:
     """
     Shows tensors from iterable data loader as images (width*height number of images).
@@ -216,16 +189,13 @@ def image_shower(dataloader: DataLoader, width: int = 2, height: int = 2) -> Non
     idx_to_class_train = {v: k for k, v in df_train.class_to_idx.items()}
     for i in range(width):
         for ii in range(height):
-            label = idx_to_class_train[labels[i*width+ii].item()]
+            label = idx_to_class_train[labels[i * width + ii].item()]
             # label = tumor_names[label]
             ax = axes[i, ii]
-            image = images[i*width+ii].permute((1, 2, 0))
+            image = images[i * width + ii].permute((1, 2, 0))
             ax.imshow(image)
             ax.set_title(label)
     plt.show()
-
-
-image_shower(dataloader_train)
 
 
 class CNN(nn.Module):
@@ -248,7 +218,7 @@ class CNN(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d((2, 2)),
             nn.BatchNorm2d(128),
-            nn.AvgPool2d((62, 37)),  # fuck knows, debug
+            nn.AvgPool2d((72, 72)),  # fuck knows, debug
 
         )
         self.dense = nn.Sequential(
@@ -264,7 +234,23 @@ class CNN(nn.Module):
         return x
 
 
-def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer) -> Tuple[np.ndarray]:
+def mean_sd(data_iterator):
+    mean = torch.zeros(3)
+    sd = torch.zeros(3)
+
+    with tqdm(total=len(data_iterator)) as t:
+        for idx, data in enumerate(data_iterator):
+            t.update(1)
+            image = data[0]
+            mean += torch.mean(image, (0, 2, 3))
+            sd += torch.std(image, (0, 2, 3))
+    mean = mean / len(data_iterator)
+    sd = sd / len(data_iterator)
+    return mean, sd
+
+
+def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer = None, is_test: bool = False) -> Tuple[
+    np.ndarray]:
     """
     Runs an epoch of training
     :param data_iterator: DataLoader object
@@ -274,6 +260,7 @@ def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer) -> Tu
     """
     loss = []
     acc = []
+    confusion_m = torch.zeros((3, 3))
     with tqdm(total=len(data_iterator)) as t:
         for idx, data in enumerate(data_iterator):
             t.update(1)
@@ -290,11 +277,15 @@ def run_epoch(data_iterator, model: CNN, optimizer: torch.optim.Optimizer) -> Tu
             asd = np.equal(prediction.cpu().numpy(), labels.cpu().numpy())
             accuracy = np.mean(asd)
             acc.append(accuracy)
+            if is_test is True:
+                for idx2, label in enumerate(labels):
+                    confusion_m[label.item(), prediction[idx2].item()] += 1
             if model.training is True:
                 optimizer.zero_grad()
                 indiv_loss.backward()
                 optimizer.step()
-
+    if is_test is True:
+        return np.mean(loss), np.mean(acc), confusion_m.numpy()
     return np.mean(loss), np.mean(acc)
 
 
@@ -316,14 +307,140 @@ def train_model(train_data: DataLoader, test_data: DataLoader, model: CNN, n_epo
         loss, acc = run_epoch(train_data, model.train(), optimizer)
         print(f"Loss: {loss:.6f}, Accuracy: {acc:.6f}")
 
-        # Run **validation** although something have to be done about unbalanced stuff
-        # TODO: rethink validation, add additional fit indecies
+        # Run **validation**
         val_loss, val_acc = run_epoch(test_data, model.eval(), optimizer)
         print(f"Validation loss: {val_loss:.6f}, Validation accuracy: {val_acc:.6f}")
 
     # Save model
-    torch.save(model, 'model420.pt')
+    torch.save(model, 'model421.pt')
 
 
-model = CNN(None).to(device)
-train_model(dataloader_train, dataloader_test, model)
+def test_model(test_data: DataLoader, model: CNN) -> None:
+    """
+    Tests neural network.
+    :param test_data: test data
+    :param model: pytorch model
+    :return: None
+    """
+    optimizer = torch.optim.Adam(model.parameters())
+
+    # Run **testing**
+    test_loss, test_acc, confusion_m = run_epoch(test_data, model.eval(), optimizer, is_test=True)
+    print(f"Test loss: {test_loss:.6f}, Test accuracy: {test_acc:.6f}, Confusion matrix:\n {confusion_m}")
+
+
+def test_images(images: List[np.ndarray], model: nn.Module, labels: List[int] = None) -> None:
+    """
+    Classifies a list of images based on a given model, shows the pictures, and probabilites, and optionally
+    associated labels
+    :param images: images as np arrays
+    :param model: pytorch model
+    :param labels: list of labels as integers
+    :return: None
+    """
+    transform_test = transforms.Compose([transforms.ToPILImage(),
+                                         transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0)),
+                                         transforms.ToTensor(),
+                                         transforms.Normalize([0.796, 0.784, 0.778], [0.0904, 0.148, 0.124])])
+    list_of_probs = []
+    for idx, image in enumerate(images):
+        probabilities = np.zeros(3)
+        for _ in range(5):
+            input = transform_test(image)
+            with torch.no_grad():
+                model_out = model.forward(input[None, ...].cuda())
+                softm = nn.Softmax(dim=1)
+                model_out = softm(model_out)
+            model_out = model_out.cpu().numpy()
+            probabilities += model_out.reshape(3)
+        probabilities /= 5
+        list_of_probs.append(probabilities)
+        plt.imshow(image[..., [2, 1, 0]], aspect="equal")
+        if labels is not None:
+            plt.title(f"Probablities: Melanoma with {probabilities[0]:.3f} ({labels[idx] == 0}),\n "
+                      f"Naevus with {probabilities[1]:.3f} ({labels[idx] == 1}),\n"
+                      f"Other with {probabilities[2]:.3f} ({labels[idx] == 2})"
+                      )
+        else:
+            plt.title(f"Probablities: Melanoma with {probabilities[0]:.3f}, Naevus with {probabilities[1]:.3f},"
+                      f"Other with {probabilities[2]:.3f}")
+        plt.show()
+
+
+if __name__ == '__main__':
+
+    device = torch.device('cuda:0')
+    print("Gimme input (train for training, test for testing, imgs for some images to classify):\n")
+    what = input()
+    #  preprocessing mean and sd
+    transform_pre = transforms.Compose([transforms.RandomResizedCrop((300, 300), scale=(0.9, 1.0)),
+                                        transforms.ToTensor()])
+
+    #  teszt images resized
+    transform_test = transforms.Compose([transforms.RandomResizedCrop((300, 300), scale=(0.9, 1.0)),
+                                         transforms.ToTensor(),
+                                         transforms.Normalize([0.796, 0.784, 0.778], [0.0904, 0.148, 0.124])])
+
+    # train images resized, and random transformed for augmentation
+    transform_train = transforms.Compose([transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0)),
+                                          transforms.RandomHorizontalFlip(),
+                                          transforms.RandomVerticalFlip(),
+                                          transforms.ColorJitter(brightness=0.2, contrast=0.3, saturation=0.1),
+                                          transforms.ToTensor(),
+                                          transforms.Normalize([0.796, 0.784, 0.778], [0.0904, 0.148, 0.124]),
+                                          transforms.RandomErasing(scale=(0.02, 0.2))
+                                          ])
+
+    df_train = datasets.ImageFolder("trainnew", transform=transform_train)
+    df_val = datasets.ImageFolder("valnew", transform=transform_test)
+    # df_test = datasets.ImageFolder("testnew", transform=transform_test)
+    corrections = ImageCorrections()
+    weights_train_long, weights_train = weights(df_train)
+
+    if what == "train":
+
+        df_train0 = datasets.ImageFolder("trainnew", transform=transform_pre)
+        dataloader_preproc = DataLoader(df_train0, batch_size=20)
+        mean, sd = mean_sd(dataloader_preproc)
+        np.savetxt("mean.txt", mean.numpy())
+        np.savetxt("sd.txt", sd.numpy())
+        dataloader_train = DataLoader(df_train, batch_size=20, pin_memory=True,
+                                      shuffle=True,
+                                      num_workers=10)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
+
+        dataloader_val = DataLoader(df_val, batch_size=20, pin_memory=True, num_workers=10)
+        # dataloader_test = DataLoader(df_test, batch_size=20, pin_memory=True, num_workers=10)
+        image_shower(dataloader_train)
+        model = CNN().to(device)
+        model2 = EfficientNet.from_pretrained('efficientnet-b3', num_classes=3).to(device)
+        train_model(dataloader_train, dataloader_val, model2)
+    elif what == "test":
+        df_test = datasets.ImageFolder("testnew", transform=transform_test)
+        dataloader_test = DataLoader(df_test, batch_size=20, pin_memory=True, num_workers=10)
+        model_own = torch.load("model420.pt")
+        test_model(dataloader_test, model_own)
+    else:
+        model_own = torch.load("model420.pt")
+        labels = []
+        images = []
+        filenames = []
+
+        for path, dirs, files in os.walk("C:/Users/pmarc/PycharmProjects/AI2/melanoma/trainnew/"):
+            for file in files:
+                if path.split("/")[-1] == "melanoma":
+                    labels.append(0)
+                elif path.split("/")[-1] == "naevus":
+                    labels.append(1)
+                elif path.split("/")[-1] == "other":
+                    labels.append(2)
+                filenames.append(path + "/" + file)
+
+        choice = np.random.randint(0, len(labels), size=10)
+        newlabels = []
+        for i in choice:
+            images.append(cv2.imread(filenames[i]))
+            newlabels.append(labels[i])
+
+        #images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[2]))))
+
+        test_images(images, model_own, labels=newlabels)
