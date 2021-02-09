@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import cv2
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Any
 from efficientnet_pytorch import EfficientNet
 
 
@@ -150,7 +150,7 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
 # TODO: representations, may make feature extr. easier
 
 
-def weights(dataset: datasets.ImageFolder) -> Tuple[List[float]]:
+def weights(dataset: datasets.ImageFolder) -> Tuple[List[float], List[float]]:
     """
     Balancing weights for unbalanced dataset
     :param dataset: set of images with labels
@@ -236,7 +236,7 @@ class CNN(nn.Module):
 
 def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Calculates mean and standard deviation values of RGB channels globally across images in data_iterator generator. 
+    Calculates mean and standard deviation values of RGB channels globally across images in data_iterator generator.
     :param data_iterator: DataLoader generator object
     :return: mean and sd matrices in torch format
     """
@@ -255,7 +255,7 @@ def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
 
 
 def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None, is_test: bool = False)\
-        -> Tuple[np.ndarray]:
+        -> Tuple[np.ndarray, np.ndarray, Any]:
     """
     Runs an epoch of training
     :param is_test: set true if epoch is used in testing the model with test set, so it returns confusion matrix too
@@ -292,7 +292,7 @@ def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.opti
                 optimizer.step()
     if is_test is True:
         return np.mean(loss), np.mean(acc), confusion_m.numpy()
-    return np.mean(loss), np.mean(acc)
+    return np.mean(loss), np.mean(acc), None
 
 
 # extra params for optional SGD:
@@ -310,11 +310,11 @@ def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module,
         print(f"-------------\nEpoch {epoch} / {n_epochs}:\n")
 
         # Run **training***
-        loss, acc = run_epoch(train_data, model.train(), optimizer)
+        loss, acc, _ = run_epoch(train_data, model.train(), optimizer)
         print(f"Loss: {loss:.6f}, Accuracy: {acc:.6f}")
 
         # Run **validation**
-        val_loss, val_acc = run_epoch(test_data, model.eval(), optimizer)
+        val_loss, val_acc, _ = run_epoch(test_data, model.eval(), optimizer)
         print(f"Validation loss: {val_loss:.6f}, Validation accuracy: {val_acc:.6f}")
 
     # Save model
@@ -447,6 +447,6 @@ if __name__ == '__main__':
             images.append(cv2.imread(filenames[i]))
             newlabels.append(labels[i])
 
-        #images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[2]))))
+        # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[2]))))
 
         test_images(images, model_own, labels=newlabels)
