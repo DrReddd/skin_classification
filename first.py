@@ -95,10 +95,133 @@ class ImageCorrections:
         return image_new
 
 
-# corrections.plot_image("C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/melanoma/ISIC_0000145_downsampled.jpg",
-#                        power=6, gamma=2.2)
-#
-# cropimage = cv2.imread("C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/melanoma/ISIC_0000036_downsampled.jpg")
+class CNN(nn.Module):
+    """Random neural network, convolutions, max pools, batchnorm etc."""
+
+    # TODO: implement transfer learning with some pretrained models
+
+    def __init__(self):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 64, (3, 3)),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, (3, 3)),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
+            nn.BatchNorm2d(64),
+            nn.Conv2d(64, 128, (3, 3)),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, (3, 3)),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
+            nn.BatchNorm2d(128),
+            nn.AvgPool2d((72, 72)),  # fuck knows, debug
+
+        )
+        self.dense = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 3)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.cnn(x)
+        x = torch.squeeze(x)
+        x = self.dense(x)
+        return x
+
+
+class Hooks:
+    """
+    Class for hooking model modules, collecting and displaying internal data during back or forward propagation
+    """
+
+    def __init__(self, model: nn.Module):
+        """
+
+        :param model: pytorch model
+        """
+        self.model = model
+        self.gradientlist = []
+        self.model.eval()
+        self.printgradnorm()
+
+    def printgradnorm(self):
+        """
+
+        :return: None
+        """
+
+        def printgradnorm_inner(module: nn.Module, grad_input: Tuple, grad_output: Tuple):
+            """
+
+            :param module: module to hook
+            :param grad_input: input gradient
+            :param grad_output: output gradient
+            :return: None
+            """
+            print(type(module))
+            print(type(grad_input))
+            output = grad_output[0].squeeze().cpu().numpy()
+            for i in range(output.shape[0]):
+                output_abs = np.abs(output[i, ...])
+                output_element = output[i, ...]
+                self.gradientlist.append(output_abs)
+
+        def forw_hook_cnn(module: nn.Module, input: Tuple, output: torch.Tensor):
+            print(input[0].shape)
+            output = output.squeeze().cpu().detach().numpy()
+            for i in range(output.shape[0]):
+                output_abs = np.abs(output[i, ...])
+                output_element = output[i, ...]
+                self.gradientlist.append(output_element)
+
+        for _, module in self.model.named_modules():
+            if isinstance(module, nn.modules.conv.Conv2d):
+                module.register_backward_hook(printgradnorm_inner)
+                module.register_forward_hook(forw_hook_cnn)
+                break
+
+    def saliency(self, image: np.ndarray, label: torch.Tensor):
+        """
+        Visualizes image activation based onforward prop and based on backward prop using the gradients from
+         first convolution layer, channelwise.
+        :param image: Image to visualize
+        :param label: Label of the image for loss function
+        :return: None
+        """
+
+        transform_test1 = transforms.Compose([transforms.ToPILImage(),
+                                              transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0))])
+        transform_test2 = transforms.Compose([transforms.ToTensor(),
+                                              transforms.Normalize([0.796, 0.784, 0.778], [0.0904, 0.148, 0.124])])
+        input_mid = transform_test1(image)
+        input = transform_test2(input_mid)
+        model_out = self.model(input[None, ...].cuda())
+        indiv_loss = nn.functional.cross_entropy(model_out, label.cuda(),
+                                                 weight=torch.FloatTensor(weights_train).cuda())
+
+        fig, axs = plt.subplots(5, 8)
+        for i in range(5):
+            for ii in range(8):
+                if i == 0 and ii == 0:
+                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                else:
+                    axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="seismic")
+
+        self.gradientlist = []
+        indiv_loss.backward()
+
+        # first cnn of effnet has 40 conv channels, this shows first 39 and original picture for convinience
+        fig, axs = plt.subplots(5, 8)
+        for i in range(5):
+            for ii in range(8):
+                if i == 0 and ii == 0:
+                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                else:
+                    axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="magma")
+
+        plt.show()
 
 
 def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
@@ -198,42 +321,6 @@ def image_shower(dataloader: DataLoader, width: int = 2, height: int = 2) -> Non
     plt.show()
 
 
-class CNN(nn.Module):
-    """Random neural network, convolutions, max pools, batchnorm etc."""
-
-    # TODO: implement transfer learning with some pretrained models
-
-    def __init__(self):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv2d(3, 64, (3, 3)),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, (3, 3)),
-            nn.ReLU(),
-            nn.MaxPool2d((2, 2)),
-            nn.BatchNorm2d(64),
-            nn.Conv2d(64, 128, (3, 3)),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, (3, 3)),
-            nn.ReLU(),
-            nn.MaxPool2d((2, 2)),
-            nn.BatchNorm2d(128),
-            nn.AvgPool2d((72, 72)),  # fuck knows, debug
-
-        )
-        self.dense = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.cnn(x)
-        x = torch.squeeze(x)
-        x = self.dense(x)
-        return x
-
-
 def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Calculates mean and standard deviation values of RGB channels globally across images in data_iterator generator.
@@ -254,8 +341,8 @@ def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
     return mean, sd
 
 
-def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None, is_test: bool = False)\
-        -> Tuple[np.ndarray, np.ndarray, Any]:
+def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None,
+              is_test: bool = False) -> Tuple[np.ndarray, np.ndarray, Any]:
     """
     Runs an epoch of training
     :param is_test: set true if epoch is used in testing the model with test set, so it returns confusion matrix too
@@ -405,16 +492,16 @@ if __name__ == '__main__':
 
     if what == "train":
 
-        df_train0 = datasets.ImageFolder("trainnew", transform=transform_pre)
-        dataloader_preproc = DataLoader(df_train0, batch_size=20)
-        mean, sd = mean_sd(dataloader_preproc)
-        np.savetxt("mean.txt", mean.numpy())
-        np.savetxt("sd.txt", sd.numpy())
-        dataloader_train = DataLoader(df_train, batch_size=20, pin_memory=True,
+        # df_train0 = datasets.ImageFolder("trainnew", transform=transform_pre)
+        # dataloader_preproc = DataLoader(df_train0, batch_size=20)
+        # mean, sd = mean_sd(dataloader_preproc)
+        # np.savetxt("mean.txt", mean.numpy())
+        # np.savetxt("sd.txt", sd.numpy())
+        dataloader_train = DataLoader(df_train, batch_size=16, pin_memory=True,
                                       shuffle=True,
-                                      num_workers=10)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
+                                      num_workers=8)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
 
-        dataloader_val = DataLoader(df_val, batch_size=20, pin_memory=True, num_workers=10)
+        dataloader_val = DataLoader(df_val, batch_size=16, pin_memory=True, num_workers=8)
         # dataloader_test = DataLoader(df_test, batch_size=20, pin_memory=True, num_workers=10)
         image_shower(dataloader_train)
         model = CNN().to(device)
@@ -422,8 +509,8 @@ if __name__ == '__main__':
         train_model(dataloader_train, dataloader_val, model2)
     elif what == "test":
         df_test = datasets.ImageFolder("testnew", transform=transform_test)
-        dataloader_test = DataLoader(df_test, batch_size=20, pin_memory=True, num_workers=10)
-        model_own = torch.load("model420.pt")
+        dataloader_test = DataLoader(df_test, batch_size=16, pin_memory=True, num_workers=8)
+        model_own = torch.load("model420.pt").to(device)
         test_model(dataloader_test, model_own)
     else:
         model_own = torch.load("model420.pt")
@@ -448,5 +535,8 @@ if __name__ == '__main__':
             newlabels.append(labels[i])
 
         # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[2]))))
+
+        hooks = Hooks(model_own)
+        hooks.saliency(images[0], torch.tensor([newlabels[0]], dtype=torch.long))
 
         test_images(images, model_own, labels=newlabels)
