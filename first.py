@@ -136,30 +136,33 @@ class Hooks:
     Class for hooking model modules, collecting and displaying internal data during back or forward propagation
     """
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, which_cnn_layer: int = 0):
         """
 
         :param model: pytorch model
+        :param which_cnn_layer: which convolution layer to hook, default is first (0)
         """
         self.model = model
         self.gradientlist = []
         self.model.eval()
-        self.printgradnorm()
+        self.which_cnn_layer = which_cnn_layer
+        self.hooker()
 
-    def printgradnorm(self):
+    def hooker(self):
         """
-
+        Registers hooks defined in inner functions.
         :return: None
         """
 
-        def printgradnorm_inner(module: nn.Module, grad_input: Tuple, grad_output: Tuple):
+        def backw_hook_cnn(module: nn.Module, grad_input: Tuple, grad_output: Tuple):
             """
-
+            Backwards hook
             :param module: module to hook
             :param grad_input: input gradient
             :param grad_output: output gradient
             :return: None
             """
+            self.gradientlist = []
             output = grad_output[0].squeeze().cpu().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
@@ -167,17 +170,29 @@ class Hooks:
                 self.gradientlist.append(output_abs)
 
         def forw_hook_cnn(module: nn.Module, input: Tuple, output: torch.Tensor):
+            """
+            Forwards hook
+            :param module: module to hook
+            :param input: input
+            :param output: output
+            :return: None
+            """
+            self.gradientlist = []
             output = output.squeeze().cpu().detach().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
                 output_element = output[i, ...]
                 self.gradientlist.append(output_element)
 
+        conv_layer_counter = 0
         for _, module in self.model.named_modules():
-            if isinstance(module, nn.modules.conv.Conv2d):
-                module.register_backward_hook(printgradnorm_inner)
+            print(type(module))
+            if isinstance(module, nn.modules.conv.Conv2d) and conv_layer_counter == self.which_cnn_layer:
+                module.register_backward_hook(backw_hook_cnn)
                 module.register_forward_hook(forw_hook_cnn)
                 break
+            if isinstance(module, nn.modules.conv.Conv2d):
+                conv_layer_counter += 1
 
     def saliency(self, image: np.ndarray, label: torch.Tensor):
         """
@@ -197,6 +212,7 @@ class Hooks:
         model_out = self.model(input[None, ...].cuda())
         indiv_loss = nn.functional.cross_entropy(model_out, label.cuda(),
                                                  weight=torch.FloatTensor(weights_train).cuda())
+        #  model_out[None, :]
 
         fig, axs = plt.subplots(5, 8)
         for i in range(5):
@@ -206,7 +222,6 @@ class Hooks:
                 else:
                     axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="seismic")
 
-        self.gradientlist = []
         indiv_loss.backward()
 
         # first cnn of effnet has 40 conv channels, this shows first 39 and original picture for convinience
@@ -289,7 +304,6 @@ def weights(dataset: datasets.ImageFolder) -> Tuple[List[float], List[float]]:
 
     weights_short = []
     for k, v in counter.items():
-        print(len(dataset))
         weights_short.append(len(dataset) / v)
     return weights, weights_short
 
@@ -511,6 +525,7 @@ if __name__ == '__main__':
         test_model(dataloader_test, model_own)
     else:
         model_own = torch.load("model420.pt")
+        model2 = CNN().to(device)
         labels = []
         images = []
         filenames = []
