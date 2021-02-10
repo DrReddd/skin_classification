@@ -160,8 +160,6 @@ class Hooks:
             :param grad_output: output gradient
             :return: None
             """
-            print(type(module))
-            print(type(grad_input))
             output = grad_output[0].squeeze().cpu().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
@@ -169,7 +167,6 @@ class Hooks:
                 self.gradientlist.append(output_abs)
 
         def forw_hook_cnn(module: nn.Module, input: Tuple, output: torch.Tensor):
-            print(input[0].shape)
             output = output.squeeze().cpu().detach().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
