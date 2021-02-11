@@ -143,6 +143,7 @@ class Hooks:
         """
         self.model = model
         self.gradientlist = []
+        self.gradientlist_in = []  # different in forward and backward cycles
         # self.dd_grad = None
         # self.dd_image = None
         # self.dd_hook_reached = False
@@ -150,7 +151,7 @@ class Hooks:
         self.which_cnn_layer = which_cnn_layer
         self.hooker()
 
-    def hooker(self, filter=10):
+    def hooker(self):
         """
         Registers hooks defined in inner functions.
         :return: None
@@ -164,6 +165,7 @@ class Hooks:
             :param grad_output: output gradient
             :return: None
             """
+            self.gradientlist_in = grad_input
             for input in grad_input:
                 if input is not None:
                     print(input.shape)
@@ -183,27 +185,22 @@ class Hooks:
             :return: None
             """
             self.gradientlist = []
+            self.gradientlist_in = module.weight.cpu().detach().numpy()
             output = output.squeeze().cpu().detach().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
                 output_element = output[i, ...]
                 self.gradientlist.append(output_element)
 
-        def guided_relu_hook(module, grad_in, grad_out):
+        def guided_swish_hook(module, grad_in, grad_out):
             return (torch.clamp(grad_in[0], min=0.0),)
-
-        def hook_function_dd(module, grad_in, grad_out):
-            self.dd_grad = grad_out[0, filter]
-            print(self.dd_grad.shape)
-            self.dd_hook_reached = True
-            raise NotImplementedError
 
         conv_layer_counter = 0
         for _, module in self.model.named_modules():
 
             if isinstance(module, efficientnet_pytorch.utils.MemoryEfficientSwish):
                 print("please")
-                module.register_backward_hook(guided_relu_hook)
+                module.register_backward_hook(guided_swish_hook)
             if isinstance(module, nn.modules.conv.Conv2d) and conv_layer_counter == self.which_cnn_layer:
                 module.register_backward_hook(backw_hook_cnn)
                 module.register_forward_hook(forw_hook_cnn)
@@ -213,25 +210,35 @@ class Hooks:
     def saliency(self, image: np.ndarray, label: torch.Tensor):
         """
         Visualizes image activation based onforward prop and based on backward prop using the gradients from
-         first convolution layer, channelwise.
+         first convolution layer.
         :param image: Image to visualize
         :param label: Label of the image for loss function
         :return: None
         """
-
         transform_test1 = transforms.Compose([transforms.ToPILImage(),
                                               transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0))])
         transform_test2 = transforms.Compose([transforms.ToTensor(),
                                               transforms.Normalize([0.796, 0.784, 0.778], [0.0904, 0.148, 0.124])])
         input_mid = transform_test1(image)
         input = transform_test2(input_mid)
+        input.requires_grad = True
         model_out = self.model(input[None, ...].cuda())
         indiv_loss = nn.functional.cross_entropy(model_out, label.cuda(),
                                                  weight=torch.FloatTensor(weights_train).cuda())
-        indiv_loss = torch.zeros((1, 3)).cuda()
-        indiv_loss[0, label.item()] = 1
-        #  model_out[None, :]
 
+        # cnn weights, and convolution result plotted:
+        fig, axs = plt.subplots(5, 8)
+        #self.gradientlist_in = np.interp(self.gradientlist_in, (self.gradientlist_in.min(), self.gradientlist_in.max()), (0, 1))
+        for i in range(5):
+            for ii in range(8):
+                if i == 0 and ii == 0:
+                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                else:
+                    asd = self.gradientlist_in[5 * i + ii - 1].squeeze()
+                    # asd = asd*np.array([0.0904, 0.148, 0.124])[:, None, None]+np.array([0.796, 0.784, 0.778])[:, None, None]
+                    asd = asd.transpose((1, 2, 0))
+                    #asd = np.interp(asd, (asd.min(), asd.max()), (0, 1))
+                    axs[i, ii].imshow(asd)
         fig, axs = plt.subplots(5, 8)
         for i in range(5):
             for ii in range(8):
@@ -240,10 +247,22 @@ class Hooks:
                 else:
                     axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="seismic")
 
-        self.model.zero_grad()
-        model_out.backward(gradient=indiv_loss)
+        plt.show()
 
-        # first cnn of effnet has 40 conv channels, this shows first 39 and original picture for convinience
+        self.model.zero_grad()
+        indiv_loss.backward()
+
+        # basic guided saliency map:
+        saliency_input = self.gradientlist_in[0].squeeze()
+        saliency_input = saliency_input.cpu().numpy().transpose((1, 2, 0))
+        saliency_input[np.where(saliency_input<0)] = 0
+        saliency_input = np.interp(saliency_input, (saliency_input.min(), saliency_input.max()), (0, 1))
+        fig, axs = plt.subplots(1, 2)
+        axs[0].imshow(saliency_input)
+        axs[1].imshow(np.array(input_mid)[..., [2, 1, 0]])
+        plt.show()
+
+        # output gradients of first cnn:
         fig, axs = plt.subplots(5, 8)
         for i in range(5):
             for ii in range(8):
@@ -538,7 +557,7 @@ if __name__ == '__main__':
         model_own = torch.load("model420.pt").to(device)
         test_model(dataloader_test, model_own)
     else:
-        model_own = torch.load("model420.pt")
+        model_own = torch.load("model420.pt").to(device)
         model2 = CNN().to(device)
         labels = []
         images = []
@@ -552,6 +571,8 @@ if __name__ == '__main__':
                     labels.append(1)
                 elif path.split("/")[-1] == "other":
                     labels.append(2)
+                else:
+                    print(path)
                 filenames.append(path + "/" + file)
 
         choice = np.random.randint(0, len(labels), size=10)
@@ -562,8 +583,8 @@ if __name__ == '__main__':
 
         # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[8]))))
 
+        test_images(images, model_own.eval(), labels=newlabels)
+
         hooks = Hooks(model_own)
 
         hooks.saliency(images[0], torch.tensor([newlabels[0]], dtype=torch.long))
-
-        test_images(images, model_own, labels=newlabels)
