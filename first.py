@@ -232,7 +232,7 @@ class Hooks:
         for i in range(5):
             for ii in range(8):
                 if i == 0 and ii == 0:
-                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                    axs[i, ii].imshow(np.array(input_mid))
                 else:
                     asd = self.gradientlist_in[5 * i + ii - 1].squeeze()
                     # asd = asd*np.array([0.0904, 0.148, 0.124])[:, None, None]+np.array([0.796, 0.784, 0.778])[:, None, None]
@@ -243,7 +243,7 @@ class Hooks:
         for i in range(5):
             for ii in range(8):
                 if i == 0 and ii == 0:
-                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                    axs[i, ii].imshow(np.array(input_mid))
                 else:
                     axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="seismic")
 
@@ -259,7 +259,7 @@ class Hooks:
         saliency_input = np.interp(saliency_input, (saliency_input.min(), saliency_input.max()), (0, 1))
         fig, axs = plt.subplots(1, 2)
         axs[0].imshow(saliency_input)
-        axs[1].imshow(np.array(input_mid)[..., [2, 1, 0]])
+        axs[1].imshow(np.array(input_mid))
         plt.show()
 
         # output gradients of first cnn:
@@ -267,7 +267,7 @@ class Hooks:
         for i in range(5):
             for ii in range(8):
                 if i == 0 and ii == 0:
-                    axs[i, ii].imshow(np.array(input_mid)[..., [2, 1, 0]])
+                    axs[i, ii].imshow(np.array(input_mid))
                 else:
                     axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="magma")
 
@@ -485,14 +485,14 @@ def test_images(images: List[np.ndarray], model: nn.Module, labels: List[int] = 
         for _ in range(5):
             input = transform_test(image)
             with torch.no_grad():
-                model_out = model.forward(input[None, ...].cuda())
+                model_out = model(input[None, ...].cuda())
                 softm = nn.Softmax(dim=1)
                 model_out = softm(model_out)
             model_out = model_out.cpu().numpy()
             probabilities += model_out.reshape(3)
         probabilities /= 5
         list_of_probs.append(probabilities)
-        plt.imshow(image[..., [2, 1, 0]], aspect="equal")
+        plt.imshow(image, aspect="equal")
         if labels is not None:
             plt.title(f"Probablities: Melanoma with {probabilities[0]:.3f} ({labels[idx] == 0}),\n "
                       f"Naevus with {probabilities[1]:.3f} ({labels[idx] == 1}),\n"
@@ -578,13 +578,13 @@ if __name__ == '__main__':
         choice = np.random.randint(0, len(labels), size=10)
         newlabels = []
         for i in choice:
-            images.append(cv2.imread(filenames[i]))
+            images.append(cv2.imread(filenames[i])[..., [2, 1, 0]])
             newlabels.append(labels[i])
 
         # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[8]))))
 
-        test_images(images, model_own.eval(), labels=newlabels)
-
         hooks = Hooks(model_own)
 
         hooks.saliency(images[0], torch.tensor([newlabels[0]], dtype=torch.long))
+
+        test_images(images, model_own.eval(), labels=newlabels)
