@@ -9,6 +9,7 @@ import cv2
 import os
 from typing import List, Tuple, Any
 from efficientnet_pytorch import EfficientNet
+import efficientnet_pytorch
 
 
 class ImageCorrections:
@@ -98,8 +99,6 @@ class ImageCorrections:
 class CNN(nn.Module):
     """Random neural network, convolutions, max pools, batchnorm etc."""
 
-    # TODO: implement transfer learning with some pretrained models
-
     def __init__(self):
         super().__init__()
         self.cnn = nn.Sequential(
@@ -144,11 +143,14 @@ class Hooks:
         """
         self.model = model
         self.gradientlist = []
+        # self.dd_grad = None
+        # self.dd_image = None
+        # self.dd_hook_reached = False
         self.model.eval()
         self.which_cnn_layer = which_cnn_layer
         self.hooker()
 
-    def hooker(self):
+    def hooker(self, filter=10):
         """
         Registers hooks defined in inner functions.
         :return: None
@@ -162,12 +164,15 @@ class Hooks:
             :param grad_output: output gradient
             :return: None
             """
+            for input in grad_input:
+                if input is not None:
+                    print(input.shape)
             self.gradientlist = []
             output = grad_output[0].squeeze().cpu().numpy()
             for i in range(output.shape[0]):
                 output_abs = np.abs(output[i, ...])
                 output_element = output[i, ...]
-                self.gradientlist.append(output_abs)
+                self.gradientlist.append(output_element)
 
         def forw_hook_cnn(module: nn.Module, input: Tuple, output: torch.Tensor):
             """
@@ -184,13 +189,24 @@ class Hooks:
                 output_element = output[i, ...]
                 self.gradientlist.append(output_element)
 
+        def guided_relu_hook(module, grad_in, grad_out):
+            return (torch.clamp(grad_in[0], min=0.0),)
+
+        def hook_function_dd(module, grad_in, grad_out):
+            self.dd_grad = grad_out[0, filter]
+            print(self.dd_grad.shape)
+            self.dd_hook_reached = True
+            raise NotImplementedError
+
         conv_layer_counter = 0
         for _, module in self.model.named_modules():
-            print(type(module))
+
+            if isinstance(module, efficientnet_pytorch.utils.MemoryEfficientSwish):
+                print("please")
+                module.register_backward_hook(guided_relu_hook)
             if isinstance(module, nn.modules.conv.Conv2d) and conv_layer_counter == self.which_cnn_layer:
                 module.register_backward_hook(backw_hook_cnn)
                 module.register_forward_hook(forw_hook_cnn)
-                break
             if isinstance(module, nn.modules.conv.Conv2d):
                 conv_layer_counter += 1
 
@@ -212,6 +228,8 @@ class Hooks:
         model_out = self.model(input[None, ...].cuda())
         indiv_loss = nn.functional.cross_entropy(model_out, label.cuda(),
                                                  weight=torch.FloatTensor(weights_train).cuda())
+        indiv_loss = torch.zeros((1, 3)).cuda()
+        indiv_loss[0, label.item()] = 1
         #  model_out[None, :]
 
         fig, axs = plt.subplots(5, 8)
@@ -222,7 +240,8 @@ class Hooks:
                 else:
                     axs[i, ii].imshow(self.gradientlist[5 * i + ii - 1], cmap="seismic")
 
-        indiv_loss.backward()
+        self.model.zero_grad()
+        model_out.backward(gradient=indiv_loss)
 
         # first cnn of effnet has 40 conv channels, this shows first 39 and original picture for convinience
         fig, axs = plt.subplots(5, 8)
@@ -278,11 +297,6 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
 # apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/val/")
 # apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/test/")
 # apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/")
-# TODO: rewrite into OOP in the end
-
-
-# TODO: maybe add some extra channels to pictures besides RGB, with manual functions applied to pics, to get some unique,
-# TODO: representations, may make feature extr. easier
 
 
 def weights(dataset: datasets.ImageFolder) -> Tuple[List[float], List[float]]:
@@ -530,7 +544,7 @@ if __name__ == '__main__':
         images = []
         filenames = []
 
-        for path, dirs, files in os.walk("C:/Users/pmarc/PycharmProjects/AI2/melanoma/trainnew/"):
+        for path, dirs, files in os.walk("C:/Users/pmarc/PycharmProjects/AI2/melanoma/testnew/"):
             for file in files:
                 if path.split("/")[-1] == "melanoma":
                     labels.append(0)
@@ -546,9 +560,10 @@ if __name__ == '__main__':
             images.append(cv2.imread(filenames[i]))
             newlabels.append(labels[i])
 
-        # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[2]))))
+        # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[8]))))
 
         hooks = Hooks(model_own)
+
         hooks.saliency(images[0], torch.tensor([newlabels[0]], dtype=torch.long))
 
         test_images(images, model_own, labels=newlabels)
