@@ -12,6 +12,8 @@ from efficientnet_pytorch import EfficientNet
 import efficientnet_pytorch
 
 
+# TODO: remove cv2 dependency, remove hardcoding of CUDA tensors, modules
+
 class ImageCorrections:
     """
     Namespace for correction methods applied once to all images
