@@ -1,18 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from skimage.transform import resize
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import cv2
 import os
 from typing import List, Tuple, Any
 from efficientnet_pytorch import EfficientNet
 import efficientnet_pytorch
 
-
-# TODO: remove cv2 dependency, remove hardcoding of CUDA tensors, modules
 
 class ImageCorrections:
     """
@@ -53,7 +51,7 @@ class ImageCorrections:
         lookup_table = np.zeros(256, dtype="uint8")
         for i in range(256):
             lookup_table[i] = 255 * np.power((i / 255), 1 / gamma)
-        new_image = cv2.LUT(image, lookup_table)
+        new_image = lookup_table[image] #cv2.LUT(image, lookup_table)
         return new_image.astype(original_type)
 
     def plot_image(self, image_path: str, tolerance: float = 0.8, gamma: float = 2.2, power: int = 6) -> None:
@@ -64,8 +62,7 @@ class ImageCorrections:
         :param image_path: path to image
         :return: None, plots images
         """
-        image = cv2.imread(image_path)
-        image = image[..., ::-1]
+        image = plt.imread(image_path)
         image_cropped = self.crop_circle(image, tolerance)
         image_gamma = self.gamma_correction(image_cropped, gamma)
         image_shades = self.shades_of_gry(image_gamma, power)
@@ -94,7 +91,7 @@ class ImageCorrections:
         boundaries = np.where(mean_cols > mean_all * tolerance)
         image_new = image_new[boundaries[0][3]: boundaries[0][-3], :, :]
         if resize_to_orig:
-            image_new = cv2.resize(image_new, (image.shape[1], image.shape[0]))
+            image_new = resize(image_new, (image.shape[0], image.shape[1]))
         return image_new
 
 
@@ -153,7 +150,7 @@ class Hooks:
         self.which_cnn_layer = which_cnn_layer
         self.hooker()
 
-    def hooker(self):
+    def hooker(self) -> None:
         """
         Registers hooks defined in inner functions.
         :return: None
@@ -201,7 +198,6 @@ class Hooks:
         for _, module in self.model.named_modules():
 
             if isinstance(module, efficientnet_pytorch.utils.MemoryEfficientSwish):
-                print("please")
                 module.register_backward_hook(guided_swish_hook)
             if isinstance(module, nn.modules.conv.Conv2d) and conv_layer_counter == self.which_cnn_layer:
                 module.register_backward_hook(backw_hook_cnn)
@@ -209,7 +205,7 @@ class Hooks:
             if isinstance(module, nn.modules.conv.Conv2d):
                 conv_layer_counter += 1
 
-    def saliency(self, image: np.ndarray, label: torch.Tensor):
+    def saliency(self, image: np.ndarray, label: torch.Tensor) -> None:
         """
         Visualizes image activation based onforward prop and based on backward prop using the gradients from
          first convolution layer.
@@ -224,9 +220,9 @@ class Hooks:
         input_mid = transform_test1(image)
         input = transform_test2(input_mid)
         input.requires_grad = True
-        model_out = self.model(input[None, ...].cuda())
-        indiv_loss = nn.functional.cross_entropy(model_out, label.cuda(),
-                                                 weight=torch.FloatTensor(weights_train).cuda())
+        model_out = self.model(input[None, ...].to(device))
+        indiv_loss = nn.functional.cross_entropy(model_out, label.to(device),
+                                                 weight=torch.FloatTensor(weights_train).to(device))
 
         # cnn weights, and convolution result plotted:
         fig, axs = plt.subplots(5, 8)
@@ -304,7 +300,7 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
             for file in files:
                 t.update(1)
                 filepath = path + "/" + file
-                original = cv2.imread(filepath)
+                original = plt.imread(filepath)
                 cropped = corrections.crop_circle(original, tolerance=0.8)
                 if original.shape[0] * original.shape[1] > 1.1 * cropped.shape[0] * cropped.shape[1]:
                     pass
@@ -312,7 +308,7 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
                     cropped = original
                 gamma_corrected = corrections.gamma_correction(cropped)
                 color_corrected = corrections.shades_of_gry(gamma_corrected)
-                cv2.imwrite(newpath + "/" + file, color_corrected)
+                plt.imsave(newpath + "/" + file, color_corrected)
 
 
 # apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/val/")
@@ -403,14 +399,15 @@ def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.opti
     with tqdm(total=len(data_iterator)) as t:
         for idx, data in enumerate(data_iterator):
             t.update(1)
-            labels = data[1].cuda()
-            data = data[0].cuda()
+            labels = data[1].to(device)
+            data = data[0].to(device)
             if model.training is False:
                 with torch.no_grad():
                     model_out = model.forward(data)
             else:
                 model_out = model.forward(data)
-            indiv_loss = nn.functional.cross_entropy(model_out, labels, weight=torch.FloatTensor(weights_train).cuda())
+            indiv_loss = nn.functional.cross_entropy(model_out, labels,
+                                                     weight=torch.FloatTensor(weights_train).to(device))
             loss.append(indiv_loss.item())
             prediction = torch.argmax(model_out, dim=1)
             asd = np.equal(prediction.cpu().numpy(), labels.cpu().numpy())
@@ -487,7 +484,7 @@ def test_images(images: List[np.ndarray], model: nn.Module, labels: List[int] = 
         for _ in range(5):
             input = transform_test(image)
             with torch.no_grad():
-                model_out = model(input[None, ...].cuda())
+                model_out = model(input[None, ...].to(device))
                 softm = nn.Softmax(dim=1)
                 model_out = softm(model_out)
             model_out = model_out.cpu().numpy()
@@ -508,7 +505,7 @@ def test_images(images: List[np.ndarray], model: nn.Module, labels: List[int] = 
 
 if __name__ == '__main__':
 
-    device = torch.device('cuda:0')
+    device = torch.device("cuda:0")
     print("Gimme input (train for training, test for testing, imgs for some images to classify):\n")
     what = input()
     #  preprocessing mean and sd
@@ -556,10 +553,10 @@ if __name__ == '__main__':
     elif what == "test":
         df_test = datasets.ImageFolder("testnew", transform=transform_test)
         dataloader_test = DataLoader(df_test, batch_size=16, pin_memory=True, num_workers=8)
-        model_own = torch.load("model420.pt").to(device)
+        model_own = torch.load("model420.pt", map_location=device)
         test_model(dataloader_test, model_own)
     else:
-        model_own = torch.load("model420.pt").to(device)
+        model_own = torch.load("model420.pt", map_location=device)
         model2 = CNN().to(device)
         labels = []
         images = []
@@ -580,10 +577,10 @@ if __name__ == '__main__':
         choice = np.random.randint(0, len(labels), size=10)
         newlabels = []
         for i in choice:
-            images.append(cv2.imread(filenames[i])[..., [2, 1, 0]])
+            images.append(plt.imread(filenames[i]))
             newlabels.append(labels[i])
 
-        # images.append(corrections.shades_of_gry(corrections.gamma_correction(cv2.imread(filenames[8]))))
+        # images.append(corrections.shades_of_gry(corrections.gamma_correction(plt.imread(filenames[0])))
 
         hooks = Hooks(model_own)
 
