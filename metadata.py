@@ -1,12 +1,13 @@
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 from torchvision.datasets.folder import default_loader
 import pandas as pd
 import json
 import numpy as np
 from typing import List, Dict, Optional, Callable, Any
 import numbers
+
+IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
 
 
 def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max):
@@ -48,21 +49,26 @@ def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str],
         json.dump(data_for_json, f)
 
 
-class ImageFolderMetadata(datasets.ImageFolder):
-    def __init__(self,
-                 root: str,
-                 metadata: Dict[str, List[float]],
-                 transform: Optional[Callable] = None,
-                 target_transform: Optional[Callable] = None,
-                 loader: Callable[[str], Any] = default_loader,
-                 is_valid_file: Optional[Callable[[str], bool]] = None,
+class ImageFolderMetadata(datasets.DatasetFolder):
+    def __init__(
+            self,
+            root: str,
+            metadata: Dict[str, np.ndarray],
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            loader: Callable[[str], Any] = default_loader,
+            is_valid_file: Optional[Callable[[str], bool]] = None,
     ):
-        super().__init__(root, transform, target_transform, loader, is_valid_file)
+        super().__init__(root, loader, IMG_EXTENSIONS if is_valid_file is None else None,
+                         transform=transform,
+                         target_transform=target_transform,
+                         is_valid_file=is_valid_file)
         self.metadata = metadata
+        self.imgs = self.samples
 
     def __getitem__(self, index: int):
 
-        path, target = self.samples[index]
+        path, target = self.imgs[index]
         sample = self.loader(path)
         if self.transform is not None:
             sample = self.transform(sample)
@@ -70,19 +76,5 @@ class ImageFolderMetadata(datasets.ImageFolder):
             target = self.target_transform(target)
 
         img_name = path.split("\\")[-1].split(".")[0]
-        metadata = self.metadata[img_name]
 
-        return sample, target, torch.tensor(metadata)
-
-
-if __name__ == '__main__':
-    data = pd.read_csv("metadata/ISIC_2019_Training_Metadata.csv")
-    jsonify(data["image"].tolist(), data, ["age_approx", "anatom_site_general", "sex"], 10)
-
-    with open("metadata.dat") as f:
-        metadata = json.load(f)
-
-    transform_pre = transforms.Compose([transforms.RandomResizedCrop((300, 300), scale=(0.9, 1.0)),
-                                        transforms.ToTensor()])
-    f_train = ImageFolderMetadata("trainnew", metadata, transform=transform_pre)
-
+        return sample, target, torch.tensor(self.metadata[img_name])
