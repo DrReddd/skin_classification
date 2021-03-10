@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from skimage.transform import resize
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -10,6 +11,9 @@ import os
 from typing import List, Tuple, Any
 from efficientnet_pytorch import EfficientNet
 import efficientnet_pytorch
+import pandas as pd
+import json
+import metadata_functions
 
 
 class ImageCorrections:
@@ -101,19 +105,22 @@ class CNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(3, 64, (3, 3)),
+            nn.Conv2d(3, 64, (12, 12)),
             nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
             nn.Conv2d(64, 64, (3, 3)),
             nn.ReLU(),
             nn.MaxPool2d((2, 2)),
             nn.BatchNorm2d(64),
             nn.Conv2d(64, 128, (3, 3)),
             nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
             nn.Conv2d(128, 128, (3, 3)),
             nn.ReLU(),
             nn.MaxPool2d((2, 2)),
             nn.BatchNorm2d(128),
-            nn.AvgPool2d((72, 72)),  # fuck knows, debug
+            nn.Dropout(),
+            nn.AvgPool2d((16, 16)),  # fuck knows, debug
 
         )
         self.dense = nn.Sequential(
@@ -126,6 +133,22 @@ class CNN(nn.Module):
         x = self.cnn(x)
         x = torch.squeeze(x)
         x = self.dense(x)
+        return x[None, ...]
+
+
+class EfficientnetMetadata(nn.Module):
+    def __init__(self, pretrained_model: nn.Module):
+        super().__init__()
+        self.pretrained = pretrained_model
+        self.connect_meta = nn.Linear(50+13, 90)
+        self.final = nn.Linear(90, 3)
+
+    def forward(self, image, metadata):
+        x1 = self.pretrained(image)
+        x2 = metadata
+        x = torch.cat((x1, x2), dim=1)
+        x = F.relu(self.connect_meta(x))
+        x = self.final(x)
         return x
 
 
@@ -197,12 +220,14 @@ class Hooks:
         conv_layer_counter = 0
         for _, module in self.model.named_modules():
 
-            if isinstance(module, efficientnet_pytorch.utils.MemoryEfficientSwish):
+            if isinstance(module, nn.modules.ReLU):
                 module.register_backward_hook(guided_swish_hook)
-            if isinstance(module, nn.modules.conv.Conv2d) and conv_layer_counter == self.which_cnn_layer:
-                module.register_backward_hook(backw_hook_cnn)
-                module.register_forward_hook(forw_hook_cnn)
-            if isinstance(module, nn.modules.conv.Conv2d):
+            elif isinstance(module, efficientnet_pytorch.utils.MemoryEfficientSwish):
+                module.register_backward_hook(guided_swish_hook)
+            elif isinstance(module, nn.modules.conv.Conv2d):
+                if conv_layer_counter == self.which_cnn_layer:
+                    module.register_backward_hook(backw_hook_cnn)
+                    module.register_forward_hook(forw_hook_cnn)
                 conv_layer_counter += 1
 
     def saliency(self, image: np.ndarray, label: torch.Tensor) -> None:
@@ -235,7 +260,7 @@ class Hooks:
                     asd = self.gradientlist_in[5 * i + ii - 1].squeeze()
                     # asd = asd*np.array([0.0904, 0.148, 0.124])[:, None, None]+np.array([0.796, 0.784, 0.778])[:, None, None]
                     asd = asd.transpose((1, 2, 0))
-                    #asd = np.interp(asd, (asd.min(), asd.max()), (0, 1))
+                    asd = np.interp(asd, (asd.min(), asd.max()), (0, 1))
                     axs[i, ii].imshow(asd)
         fig, axs = plt.subplots(5, 8)
         for i in range(5):
@@ -384,9 +409,10 @@ def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
 
 
 def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None,
-              is_test: bool = False) -> Tuple[np.ndarray, np.ndarray, Any]:
+              is_test: bool = False, is_metadata: bool = False) -> Tuple[np.ndarray, np.ndarray, Any]:
     """
     Runs an epoch of training
+    :param is_metadata: is there additional metadata to add (for model using metadata)
     :param is_test: set true if epoch is used in testing the model with test set, so it returns confusion matrix too
     :param data_iterator: DataLoader object
     :param model: pytorch model
@@ -400,12 +426,21 @@ def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.opti
         for idx, data in enumerate(data_iterator):
             t.update(1)
             labels = data[1].to(device)
-            data = data[0].to(device)
-            if model.training is False:
-                with torch.no_grad():
-                    model_out = model.forward(data)
+            image = data[0].to(device)
+            if is_metadata:
+                metadata = data[2].to(device)
+                if model.training is False:
+                    with torch.no_grad():
+                        model_out = model.forward(image, metadata)
+                else:
+                    model_out = model.forward(image, metadata)
             else:
-                model_out = model.forward(data)
+                if model.training is False:
+                    with torch.no_grad():
+                        model_out = model.forward(image)
+                else:
+                    model_out = model.forward(image)
+
             indiv_loss = nn.functional.cross_entropy(model_out, labels,
                                                      weight=torch.FloatTensor(weights_train).to(device))
             loss.append(indiv_loss.item())
@@ -426,9 +461,11 @@ def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.opti
 
 
 # extra params for optional SGD:
-def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module, n_epochs: int = 30) -> None:
+def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module, n_epochs: int = 30,
+                is_metadata: bool = False) -> None:
     """
     Trains neural network.
+    :param is_metadata: is there additional metadata to add (for model using metadata)
     :param train_data: training data
     :param test_data: validation data
     :param model: pytorch model
@@ -440,18 +477,18 @@ def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module,
         print(f"-------------\nEpoch {epoch} / {n_epochs}:\n")
 
         # Run **training***
-        loss, acc, _ = run_epoch(train_data, model.train(), optimizer)
+        loss, acc, _ = run_epoch(train_data, model.train(), optimizer, is_metadata=is_metadata)
         print(f"Loss: {loss:.6f}, Accuracy: {acc:.6f}")
 
         # Run **validation**
-        val_loss, val_acc, _ = run_epoch(test_data, model.eval(), optimizer)
+        val_loss, val_acc, _ = run_epoch(test_data, model.eval(), optimizer, is_metadata=is_metadata)
         print(f"Validation loss: {val_loss:.6f}, Validation accuracy: {val_acc:.6f}")
 
-    # Save model
-    torch.save(model, 'model421.pt')
+        # Save model
+        torch.save(model, f"models/model421_iteration{epoch}.pt")
 
 
-def test_model(test_data: DataLoader, model: nn.Module) -> None:
+def test_model(test_data: DataLoader, model: nn.Module, is_metadata: bool = False) -> None:
     """
     Tests neural network.
     :param test_data: test data
@@ -461,7 +498,8 @@ def test_model(test_data: DataLoader, model: nn.Module) -> None:
     optimizer = torch.optim.Adam(model.parameters())
 
     # Run **testing**
-    test_loss, test_acc, confusion_m = run_epoch(test_data, model.eval(), optimizer, is_test=True)
+    test_loss, test_acc, confusion_m = run_epoch(test_data, model.eval(), optimizer, is_test=True,
+                                                 is_metadata=is_metadata)
     print(f"Test loss: {test_loss:.6f}, Test accuracy: {test_acc:.6f}, Confusion matrix:\n {confusion_m}")
 
 
@@ -527,8 +565,14 @@ if __name__ == '__main__':
                                           transforms.RandomErasing(scale=(0.02, 0.2))
                                           ])
 
-    df_train = datasets.ImageFolder("trainnew", transform=transform_train)
-    df_val = datasets.ImageFolder("valnew", transform=transform_test)
+    data = pd.read_csv("metadata/ISIC_2019_Training_Metadata.csv")
+    metadata_functions.jsonify(data["image"].tolist(), data, ["age_approx", "anatom_site_general", "sex"], 10)
+
+    with open("metadata.dat") as f:
+        metadata = json.load(f)
+
+    df_train = metadata_functions.ImageFolderMetadata("trainnew", metadata, transform=transform_train)
+    df_val = metadata_functions.ImageFolderMetadata("valnew", metadata, transform=transform_test)
     # df_test = datasets.ImageFolder("testnew", transform=transform_test)
     corrections = ImageCorrections()
     weights_train_long, weights_train = weights(df_train)
@@ -540,18 +584,19 @@ if __name__ == '__main__':
         # mean, sd = mean_sd(dataloader_preproc)
         # np.savetxt("mean.txt", mean.numpy())
         # np.savetxt("sd.txt", sd.numpy())
-        dataloader_train = DataLoader(df_train, batch_size=16, pin_memory=True,
+        dataloader_train = DataLoader(df_train, batch_size=20, pin_memory=True,
                                       shuffle=True,
-                                      num_workers=8)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
+                                      num_workers=6)  # , sampler=torch.utils.data.WeightedRandomSampler(weights_train, len(weights_train))
 
-        dataloader_val = DataLoader(df_val, batch_size=16, pin_memory=True, num_workers=8)
+        dataloader_val = DataLoader(df_val, batch_size=20, pin_memory=True, num_workers=6)
         # dataloader_test = DataLoader(df_test, batch_size=20, pin_memory=True, num_workers=10)
-        image_shower(dataloader_train)
+        # image_shower(dataloader_train)
         model = CNN().to(device)
-        model2 = EfficientNet.from_pretrained('efficientnet-b3', num_classes=3).to(device)
-        train_model(dataloader_train, dataloader_val, model2)
+        model2 = EfficientNet.from_pretrained('efficientnet-b3', num_classes=50).to(device)
+        model_withmeta = EfficientnetMetadata(model2).to(device)
+        train_model(dataloader_train, dataloader_val, model_withmeta, is_metadata=True)
     elif what == "test":
-        df_test = datasets.ImageFolder("testnew", transform=transform_test)
+        df_test = datasets.ImageFolder("trainnew", transform=transform_test)
         dataloader_test = DataLoader(df_test, batch_size=16, pin_memory=True, num_workers=8)
         model_own = torch.load("model420.pt", map_location=device)
         test_model(dataloader_test, model_own)
