@@ -4,13 +4,21 @@ from torchvision.datasets.folder import default_loader
 import pandas as pd
 import json
 import numpy as np
-from typing import List, Dict, Optional, Callable, Any
+from typing import List, Dict, Optional, Callable, Any, Tuple
 import numbers
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
 
 
-def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max):
+def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: int) -> List[List]:
+    """
+    Encodes metadata columns in a table format to one-hot vectors or in case of too much unique values, a numeric
+    vector.
+    :param csv_file: metadata
+    :param cols_to_encode: columns containing relevant metadata
+    :param one_hot_max: maximal unique values in a column to encode it into one-hot format
+    :return: encoded metadata
+    """
     all_encode = list()
     for column in cols_to_encode:
         encoded_col = list()
@@ -37,7 +45,15 @@ def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max):
     return all_encode
 
 
-def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max):
+def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: int) -> None:
+    """
+    Saves metadata into json format.
+    :param names: Image names
+    :param csv_file: dataframe containing the metadata of the images in the same order as the images are in "names"
+    :param cols_to_encode: columns containing relevant metadata
+    :param one_hot_max: maximal unique values in a column to encode it into one-hot format
+    :return: None
+    """
     encoding = encode_csv(csv_file, cols_to_encode, one_hot_max)
     data_for_json = {}
     for idx, image_name in enumerate(names):
@@ -50,6 +66,9 @@ def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str],
 
 
 class ImageFolderMetadata(datasets.DatasetFolder):
+    """
+    A custom dataloader, which returns metadata alongside image and label, if it exists.
+    """
     def __init__(
             self,
             root: str,
@@ -66,7 +85,12 @@ class ImageFolderMetadata(datasets.DatasetFolder):
         self.metadata = metadata
         self.imgs = self.samples
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
+        """
+        Loads the appropriate data for the pytorch framework.
+        :param index: index of the image
+        :return: image, class, and metadata if it exists
+        """
 
         path, target = self.imgs[index]
         sample = self.loader(path)
