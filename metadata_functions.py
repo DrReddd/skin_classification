@@ -53,7 +53,7 @@ class ImageFolderMetadata(datasets.DatasetFolder):
     def __init__(
             self,
             root: str,
-            metadata: Dict[str, np.ndarray],
+            metadata: Optional[Dict[str, np.ndarray]] = None,
             transform: Optional[Callable] = None,
             target_transform: Optional[Callable] = None,
             loader: Callable[[str], Any] = default_loader,
@@ -77,4 +77,7 @@ class ImageFolderMetadata(datasets.DatasetFolder):
 
         img_name = path.split("\\")[-1].split(".")[0]
 
-        return sample, target, torch.tensor(self.metadata[img_name])
+        if self.metadata is not None:
+            return sample, target, torch.tensor(self.metadata[img_name])
+        else:
+            return sample, target
