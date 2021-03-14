@@ -4,11 +4,11 @@ from skimage.transform import resize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import datasets, transforms
+from torchvision import transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import os
-from typing import List, Tuple, Any
+from typing import List, Tuple, Optional
 from efficientnet_pytorch import EfficientNet
 import efficientnet_pytorch
 import pandas as pd
@@ -23,11 +23,22 @@ class ImageCorrections:
 
     @staticmethod
     def shades_of_gry(image: np.ndarray, power: int = 6) -> np.ndarray:
-        """Applies shades of gray color constancy with using L6 norm of image as a default.
-         Requires images with integer color range of 0 to 255
-        :param power: norm
-        :param image: Matrix: h*w*c
-        :return: image with color constancy
+        """
+        Applies shades of gray color constancy with using L6 norm of image as a default.
+        Requires images with integer color range of 0 to 255
+
+        Parameters
+        ----------
+        image: np.ndarray
+            Image to apply correction on
+        power: int
+            Which norm to use for correction
+
+        Returns
+        -------
+        np.ndarray
+            Corrected image
+
         """
         original_type = image.dtype
         new_image = image.astype(np.float)
@@ -44,11 +55,21 @@ class ImageCorrections:
 
     @staticmethod
     def gamma_correction(image: np.ndarray, gamma: float = 2.2) -> np.ndarray:
-        """Applies gamma correction, default value is used in the original shade of gray paper, apply before
+        """
+        Applies gamma correction, default value is used in the original shade of gray paper, apply before
         shade_of_gry.
-        :param image: image to apply gamma correction on
-        :param gamma: gamma correction value
-        :return: gamma corrected image
+
+        Parameters
+        ----------
+        image:
+            Image to apply gamma correction on
+        gamma:
+            Gamma correction value
+
+        Returns
+        -------
+        np.ndarray
+            Gamma corrected image
         """
         original_type = image.dtype
         image = image.astype("uint8")
@@ -58,34 +79,26 @@ class ImageCorrections:
         new_image = lookup_table[image]  # cv2.LUT(image, lookup_table)
         return new_image.astype(original_type)
 
-    def plot_image(self, image_path: str, tolerance: float = 0.8, gamma: float = 2.2, power: int = 6) -> None:
-        """Plots original image and the correction side by side
-        :param tolerance: tolerance used for cropping dark edges on image
-        :param power: see in function shades_of_gry
-        :param gamma: see in function gamma_correction
-        :param image_path: path to image
-        :return: None, plots images
-        """
-        image = plt.imread(image_path)
-        image_cropped = self.crop_circle(image, tolerance)
-        image_gamma = self.gamma_correction(image_cropped, gamma)
-        image_shades = self.shades_of_gry(image_gamma, power)
-        fig, axs = plt.subplots(2, 2)
-        axs[0, 0].imshow(image)
-        axs[0, 1].imshow(image_cropped)
-        axs[1, 0].imshow(image_gamma)
-        axs[1, 1].imshow(image_shades)
-        plt.show()
-
     @staticmethod
     def crop_circle(image: np.ndarray, tolerance: float = 0.8, resize_to_orig: bool = False) -> np.ndarray:
         """
         Crops images with dark edges (for example some images have a circle shape, padded with black (dark) pixels),
-        this is unnecessary information, and can hinder training. Cropping is based on the average RGB values in the image.
-        :param image: input image
-        :param tolerance: bigger the tolerance more cropping happens, unstable performance over 1
-        :param resize_to_orig: if cropped image should be resized to original aspect ratio
-        :return: cropped image
+        this is unnecessary information, and can hinder training.
+        Cropping is based on the average RGB values in the image.
+
+        Parameters
+        ----------
+        image:
+            Input image
+        tolerance:
+            Bigger the tolerance more cropping happens, unstable performance over 1
+        resize_to_orig:
+            If cropped image should be resized to original aspect ratio
+
+        Returns
+        -------
+        np.ndarray
+            Cropped image
         """
         mean_all = np.mean(image)
         mean_rows = np.mean(image, (0, 2))
@@ -98,9 +111,42 @@ class ImageCorrections:
             image_new = resize(image_new, (image.shape[0], image.shape[1]))
         return image_new
 
+    def plot_image(self, image_path: str, tolerance: float = 0.8, gamma: float = 2.2, power: int = 6) -> None:
+        """
+        Plots original image and the correction side by side
+
+        Parameters
+        ----------
+        image_path:
+            Path to image file
+        tolerance:
+            Tolerance used for cropping dark edges on image
+        gamma:
+            Gamma correction value
+        power:
+            Which norm to use for shades of gray correction
+
+        Returns
+        -------
+        None
+
+        """
+        image = plt.imread(image_path)
+        image_cropped = self.crop_circle(image, tolerance)
+        image_gamma = self.gamma_correction(image_cropped, gamma)
+        image_shades = self.shades_of_gry(image_gamma, power)
+        fig, axs = plt.subplots(2, 2)
+        axs[0, 0].imshow(image)
+        axs[0, 1].imshow(image_cropped)
+        axs[1, 0].imshow(image_gamma)
+        axs[1, 1].imshow(image_shades)
+        plt.show()
+
 
 class CNN(nn.Module):
-    """Random neural network, convolutions, max pools, batchnorm etc."""
+    """
+    A simple CNN architecture
+    """
 
     def __init__(self):
         super().__init__()
@@ -137,13 +183,16 @@ class CNN(nn.Module):
 
 
 class EfficientnetMetadata(nn.Module):
+    """
+    Model made by adding a metadata layer to a pretrained CNN model
+    """
     def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.pretrained = pretrained_model
         self.connect_meta = nn.Linear(50 + 13, 90)
         self.final = nn.Linear(90, 3)
 
-    def forward(self, image, metadata):
+    def forward(self, image: torch.Tensor, metadata: torch.Tensor) -> torch.Tensor:
         x1 = self.pretrained(image)
         x2 = metadata
         x = torch.cat((x1, x2), dim=1)
@@ -153,12 +202,15 @@ class EfficientnetMetadata(nn.Module):
 
 
 class Metadata(nn.Module):
+    """
+    A very simple model using only metadata, without any image data
+    """
     def __init__(self):
         super().__init__()
         self.connect_meta = nn.Linear(13, 40)
         self.final = nn.Linear(40, 3)
 
-    def forward(self, metadata):
+    def forward(self, metadata: torch.Tensor) -> torch.Tensor:
         x = metadata
         x = F.relu(self.connect_meta(x))
         x = self.final(x)
@@ -168,37 +220,57 @@ class Metadata(nn.Module):
 class Hooks:
     """
     Class for hooking model modules, collecting and displaying internal data during back or forward propagation
+
+    Arguments
+    ---------
+    model: nn.Module
+        pytorch model
+    which_cnn_layer: int
+        which convolution layer to hook, default is first (0)
+
+    Attributes
+    ----------
+    gradientlist: List[torch.Tensor]
+        for storing gradient vectors or weights during back or forward propagation for output of a hooked module
+    gradientlist_in: List[torch.Tensor]
+        for storing gradient vectors or weights during back or forward propagation for input of a hooked module
+
     """
 
     def __init__(self, model: nn.Module, which_cnn_layer: int = 0):
-        """
-
-        :param model: pytorch model
-        :param which_cnn_layer: which convolution layer to hook, default is first (0)
-        """
         self.model = model
-        self.gradientlist = []
-        self.gradientlist_in = []  # different in forward and backward cycles
-        # self.dd_grad = None
-        # self.dd_image = None
-        # self.dd_hook_reached = False
-        self.model.eval()
         self.which_cnn_layer = which_cnn_layer
+        self.gradientlist = []
+        self.gradientlist_in = []
+        self.model.eval()
         self.hooker()
 
     def hooker(self) -> None:
         """
         Registers hooks defined in inner functions.
-        :return: None
-        """
 
+        Returns
+        -------
+        None
+
+        """
         def backw_hook_cnn(module: nn.Module, grad_input: Tuple, grad_output: Tuple):
             """
             Backwards hook
-            :param module: module to hook
-            :param grad_input: input gradient
-            :param grad_output: output gradient
-            :return: None
+
+            Parameters
+            ----------
+            module:
+                module to hook
+            grad_input:
+                input gradient
+            grad_output:
+                output gradient
+
+            Returns
+            -------
+            None
+
             """
             self.gradientlist_in = grad_input
             for input in grad_input:
@@ -214,10 +286,20 @@ class Hooks:
         def forw_hook_cnn(module: nn.Module, input: Tuple, output: torch.Tensor):
             """
             Forwards hook
-            :param module: module to hook
-            :param input: input
-            :param output: output
-            :return: None
+
+            Parameters
+            ----------
+            module:
+                module to hook
+            input:
+                input
+            output:
+                output
+
+            Returns
+            -------
+            None
+
             """
             self.gradientlist = []
             self.gradientlist_in = module.weight.cpu().detach().numpy()
@@ -227,7 +309,8 @@ class Hooks:
                 output_element = output[i, ...]
                 self.gradientlist.append(output_element)
 
-        def guided_swish_hook(module, grad_in, grad_out):
+        def guided_swish_hook(module: nn.Module, grad_in: Tuple[torch.Tensor, ...],
+                              grad_out: Tuple[torch.Tensor, ...]) -> Tuple:
             return (torch.clamp(grad_in[0], min=0.0),)
 
         conv_layer_counter = 0
@@ -245,12 +328,22 @@ class Hooks:
 
     def saliency(self, image: np.ndarray, label: torch.Tensor, metadata: torch.Tensor = None) -> None:
         """
-        Visualizes image activation based onforward prop and based on backward prop using the gradients from
-         first convolution layer.
-        :param metadata: possible metadata input for appropriate models
-        :param image: Image to visualize
-        :param label: Label of the image for loss function
-        :return: None
+        Visualizes image activation based on forward prop and backward prop using the gradients from
+        first convolution layer.
+
+        Parameters
+        ----------
+        image:
+            Image to visualize
+        label:
+            Label of the image for loss function
+        metadata:
+            Possible metadata input for appropriate models
+
+        Returns
+        -------
+        None
+
         """
         transform_test1 = transforms.Compose([transforms.ToPILImage(),
                                               transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0))])
@@ -264,7 +357,7 @@ class Hooks:
         else:
             model_out = self.model(input[None, ...].to(device), metadata[None, ...].to(device))
         indiv_loss = nn.functional.cross_entropy(model_out, label.to(device),
-                                                 weight=torch.FloatTensor(weights_train).to(device))
+                                                 weight=torch.tensor(weights_train).to(device))
 
         # cnn weights, and convolution result plotted:
         fig, axs = plt.subplots(5, 8)
@@ -317,9 +410,18 @@ class Hooks:
 def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
     """
     Applies corrections to images in root_path, saves them to root_path + "new"/...
-    :param corrections: ImageCorrection class
-    :param root_path: path to images
-    :return: None
+
+    Parameters
+    ----------
+    corrections:
+        ImageCorrection class containing functions to apply to all images
+    root_path:
+        path to images
+
+    Returns
+    -------
+    None
+
     """
     path_elements = root_path.split("/")
     for idx, element in enumerate(path_elements):
@@ -358,11 +460,19 @@ def apply_corrections(corrections: ImageCorrections, root_path: str) -> None:
 # apply_corrections(corrections, "C:/Users/pmarc/PycharmProjects/AI2/melanoma/train/")
 
 
-def weights(dataset: datasets.ImageFolder) -> Tuple[List[float], List[float]]:
+def weights(dataset: metadata_functions.ImageFolderMetadata) -> Tuple[List[float], List[float]]:
     """
-    Balancing weights for unbalanced dataset
-    :param dataset: set of images with labels
-    :return: tuple: list of weights for every individual image, list of weights for every unique label
+    Computes balancing weights for unbalanced dataset
+
+    Parameters
+    ----------
+    dataset:
+        Dataset of images with labels.
+
+    Returns
+    -------
+    tuple: list of weights for every individual image, list of weights for every unique label
+
     """
     counter = {}
     weights = []
@@ -384,17 +494,26 @@ def weights(dataset: datasets.ImageFolder) -> Tuple[List[float], List[float]]:
 def image_shower(dataloader: DataLoader, width: int = 2, height: int = 2) -> None:
     """
     Shows tensors from iterable data loader as images (width*height number of images).
-    :param dataloader: DataLoader object
-    :param width: number of image columns on plot
-    :param height: number of image rows on plot
-    :return: None
+
+    Parameters
+    ----------
+    dataloader:
+        Dataloader object to load images, labels
+    width:
+        Number of image columns on plot
+    height:
+        Number of image rows on plot
+
+    Returns
+    -------
+    None
+
     """
     iterator_train = iter(dataloader)
     images_labels = next(iterator_train)
     images = images_labels[0]
     labels = images_labels[1]
     fig, axes = plt.subplots(figsize=(50, 100), ncols=width, nrows=height)
-
     idx_to_class_train = {v: k for k, v in df_train.class_to_idx.items()}
     for i in range(width):
         for ii in range(height):
@@ -410,8 +529,16 @@ def image_shower(dataloader: DataLoader, width: int = 2, height: int = 2) -> Non
 def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Calculates mean and standard deviation values of RGB channels globally across images in data_iterator generator.
-    :param data_iterator: DataLoader generator object
-    :return: mean and sd matrices in torch format
+
+    Parameters
+    ----------
+    data_iterator:
+        DataLoader object for generating the data.
+
+    Returns
+    -------
+    Mean and sd matrices in torch format
+
     """
     mean = torch.zeros(3)
     sd = torch.zeros(3)
@@ -428,15 +555,27 @@ def mean_sd(data_iterator: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
 
 
 def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer = None,
-              is_test: bool = False, is_metadata: bool = False) -> Tuple[np.ndarray, np.ndarray, Any]:
+              is_test: bool = False, is_metadata: bool = False) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
-    Runs an epoch of training
-    :param is_metadata: is there additional metadata to add (for model using metadata)
-    :param is_test: set true if epoch is used in testing the model with test set, so it returns confusion matrix too
-    :param data_iterator: DataLoader object
-    :param model: pytorch model
-    :param optimizer: pytorch optimizer
-    :return: mean loss and accuracy of the epoch, and optionally confusion matrix
+    Runs an epoch of training (or testing)
+
+    Parameters
+    ----------
+    data_iterator:
+        DataLoader object
+    model:
+        Pytorch model
+    optimizer:
+        Pytorch optimizer
+    is_test:
+        Set true if the function is used in testing the model with test set, so it returns confusion matrix too.
+    is_metadata:
+        Is there additional metadata besides images and labels (for model using metadata)
+
+    Returns
+    -------
+    Mean loss and accuracy of the epoch, and optionally confusion matrix
+
     """
     loss = []
     acc = []
@@ -483,13 +622,24 @@ def run_epoch(data_iterator: DataLoader, model: nn.Module, optimizer: torch.opti
 def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module, n_epochs: int = 50,
                 is_metadata: bool = False) -> None:
     """
-    Trains neural network.
-    :param is_metadata: is there additional metadata to add (for model using metadata)
-    :param train_data: training data
-    :param test_data: validation data
-    :param model: pytorch model
-    :param n_epochs: number of epochs
-    :return: None
+
+    Parameters
+    ----------
+    train_data:
+        Training data (DataLoader object)
+    test_data:
+        Validation data (DataLoader object)
+    model:
+        Pytorch model
+    n_epochs:
+        Number of epochs to train
+    is_metadata:
+        Is there additional metadata besides images and labels (for model using metadata)
+
+    Returns
+    -------
+    None
+
     """
     optimizer = torch.optim.Adam(model.parameters())
     for epoch in range(1, n_epochs + 1):
@@ -510,10 +660,21 @@ def train_model(train_data: DataLoader, test_data: DataLoader, model: nn.Module,
 
 def test_model(test_data: DataLoader, model: nn.Module, is_metadata: bool = False) -> None:
     """
-    Tests neural network.
-    :param test_data: test data
-    :param model: pytorch model
-    :return: None
+    Tests neural network
+
+    Parameters
+    ----------
+    test_data:
+        Test data (DataLader object)
+    model:
+        Pytorch model
+    is_metadata:
+        Is there additional metadata besides images and labels (for model using metadata)
+
+    Returns
+    -------
+    None
+
     """
     optimizer = torch.optim.Adam(model.parameters())
 
@@ -523,15 +684,27 @@ def test_model(test_data: DataLoader, model: nn.Module, is_metadata: bool = Fals
     print(f"Test loss: {test_loss:.6f}, Test accuracy: {test_acc:.6f}, Confusion matrix:\n {confusion_m}")
 
 
-def test_images(images: List[np.ndarray], model: nn.Module, labels: List[int] = None,
-                metadata: List[torch.Tensor] = None) -> None:
+def test_images(images: List[np.ndarray], model: nn.Module, labels: Optional[List[int]] = None,
+                metadata: Optional[List[torch.Tensor]] = None) -> None:
     """
     Classifies a list of images based on a given model, shows the pictures, and probabilites, and optionally
-    associated labels
-    :param images: images as np arrays
-    :param model: pytorch model
-    :param labels: list of labels as integers
-    :return: None
+    associated labels (ground truth).
+
+    Parameters
+    ----------
+    images:
+        List of images to test
+    model:
+        Pytorch model
+    labels:
+        List of associated labels
+    metadata:
+        List of associated metadata
+
+    Returns
+    -------
+    None
+
     """
     transform_test = transforms.Compose([transforms.ToPILImage(),
                                          transforms.RandomResizedCrop((300, 300), scale=(0.7, 1.0)),
