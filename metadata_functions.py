@@ -1,5 +1,5 @@
 import torch
-from torchvision import datasets, transforms
+from torchvision import datasets
 from torchvision.datasets.folder import default_loader
 import pandas as pd
 import json
@@ -10,14 +10,24 @@ import numbers
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
 
 
-def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: int) -> List[List]:
+def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: int) -> List[List[np.ndarray]]:
     """
     Encodes metadata columns in a table format to one-hot vectors or in case of too much unique values, a numeric
     vector.
-    :param csv_file: metadata
-    :param cols_to_encode: columns containing relevant metadata
-    :param one_hot_max: maximal unique values in a column to encode it into one-hot format
-    :return: encoded metadata
+
+    Parameters
+    ----------
+    csv_file:
+        Dataframe containing metadata
+    cols_to_encode:
+        Column names referring to relevant metadata
+    one_hot_max:
+        Maximal unique values in a column to encode it into one-hot format
+
+    Returns
+    -------
+    List[List[np.ndarray]]
+        Encoded metadata
     """
     all_encode = list()
     for column in cols_to_encode:
@@ -48,11 +58,22 @@ def encode_csv(csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: i
 def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str], one_hot_max: int) -> None:
     """
     Saves metadata into json format.
-    :param names: Image names
-    :param csv_file: dataframe containing the metadata of the images in the same order as the images are in "names"
-    :param cols_to_encode: columns containing relevant metadata
-    :param one_hot_max: maximal unique values in a column to encode it into one-hot format
-    :return: None
+
+    Parameters
+    ----------
+    names:
+        Image names
+    csv_file:
+        Dataframe containing the metadata of the images in the same order as the images are in "names"
+    cols_to_encode:
+        Column names referring to relevant metadata
+    one_hot_max:
+        Maximal unique values in a column to encode it into one-hot format
+
+    Returns
+    -------
+    None
+
     """
     encoding = encode_csv(csv_file, cols_to_encode, one_hot_max)
     data_for_json = {}
@@ -66,8 +87,38 @@ def jsonify(names: List[str], csv_file: pd.DataFrame, cols_to_encode: List[str],
 
 
 class ImageFolderMetadata(datasets.DatasetFolder):
-    """
-    A custom dataloader, which returns metadata alongside image and label, if it exists.
+    """A generic data loader where the images are arranged in this way: ::
+
+        root/dog/xxx.png
+        root/dog/xxy.png
+        root/dog/xxz.png
+
+        root/cat/123.png
+        root/cat/nsdf3.png
+        root/cat/asd932_.png
+
+        and optionally metadata is provided for these pictures in a dictionary, with keys as the picture filenames
+        (without the file extension)
+
+    Args:
+        root: String
+            Root directory path.
+        metadata: dictionary, optional
+            Dictionary containing metadata in its values, image names in its keys
+        transform: callable, optional
+            A function/transform that  takes in an PIL image and returns a transformed version. E.g,
+             ``transforms.RandomCrop``
+        target_transform: callable, optional
+            A function/transform that takes in the target and transforms it.
+        loader: callable, optional
+            A function to load an image given its path.
+        is_valid_file: callable, optional
+            A function that takes path of an Image file and check if the file is a valid file
+            (used to check of corrupt files)
+
+     Attributes:
+        imgs: List
+            List of (image path, class_index) tuples
     """
     def __init__(
             self,
@@ -104,4 +155,4 @@ class ImageFolderMetadata(datasets.DatasetFolder):
         if self.metadata is not None:
             return sample, target, torch.tensor(self.metadata[img_name])
         else:
-            return sample, target
+            return sample, target, None
